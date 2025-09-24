@@ -16,6 +16,7 @@ let rolling = false
 let rollStartTime = 0
 const MAX_ROLL_TIME = 6000 // ms fallback in case bodies never sleep
 // We will procedurally create geometries for each die type
+let d100PairCounter = 0
 
 function createLabelSprite(text) {
   const size = 256
@@ -416,7 +417,6 @@ function computeTopTriangleFaceValue(mesh) {
     const pos = geom.attributes.position
     const index = geom.index
     const mat = m.matrixWorld
-    const nMat = new THREE.Matrix3().getNormalMatrix(mat)
     const a = new THREE.Vector3(), b = new THREE.Vector3(), c = new THREE.Vector3()
     const v1 = new THREE.Vector3(), v2 = new THREE.Vector3(), n = new THREE.Vector3()
 
@@ -429,7 +429,7 @@ function computeTopTriangleFaceValue(mesh) {
         readVert(ia, a); readVert(ib, b); readVert(ic, c)
         v1.subVectors(b, a)
         v2.subVectors(c, a)
-        n.crossVectors(v1, v2).applyMatrix3(nMat).normalize()
+        n.crossVectors(v1, v2).normalize()
         const d = n.dot(up)
         if (d > bestDot) { bestDot = d; bestIndex = faceCount }
         faceCount++
@@ -439,7 +439,7 @@ function computeTopTriangleFaceValue(mesh) {
         readVert(i, a); readVert(i + 1, b); readVert(i + 2, c)
         v1.subVectors(b, a)
         v2.subVectors(c, a)
-        n.crossVectors(v1, v2).applyMatrix3(nMat).normalize()
+        n.crossVectors(v1, v2).normalize()
         const d = n.dot(up)
         if (d > bestDot) { bestDot = d; bestIndex = faceCount }
         faceCount++
@@ -597,18 +597,47 @@ function rollDice({ type = 'd20', count = 1 } = {}) {
   const startY = 10
   const range = 4
   for (let i = 0; i < count; i++) {
-    const mesh = createDieMesh(type)
-    mesh.castShadow = true
-    diceGroup.add(mesh)
+    if (type === 'd100') {
+      const pairId = d100PairCounter++
+      const baseX = (Math.random() - 0.5) * range
+      const baseZ = (Math.random() - 0.5) * range
 
-    const body = createBodyForMesh(mesh)
-    const x = (Math.random() - 0.5) * range
-    const z = (Math.random() - 0.5) * range
-    body.position.set(x, startY + Math.random() * 2, z)
-    body.velocity.set((Math.random() - 0.5) * 6, -2 - Math.random() * 2, (Math.random() - 0.5) * 6)
-    body.angularVelocity.set((Math.random() - 0.5) * 12, (Math.random() - 0.5) * 12, (Math.random() - 0.5) * 12)
-    world.addBody(body)
-    physicsPairs.push({ mesh, body, type })
+      // Tens die
+      const tMesh = createDieMesh('d10')
+      tMesh.castShadow = true
+      diceGroup.add(tMesh)
+      const tBody = createBodyForMesh(tMesh)
+      tBody.position.set(baseX - 0.6, startY + Math.random() * 2, baseZ)
+      tBody.velocity.set((Math.random() - 0.5) * 6, -2 - Math.random() * 2, (Math.random() - 0.5) * 6)
+      tBody.angularVelocity.set((Math.random() - 0.5) * 12, (Math.random() - 0.5) * 12, (Math.random() - 0.5) * 12)
+      world.addBody(tBody)
+      physicsPairs.push({ mesh: tMesh, body: tBody, type: 'd10', meta: { group: 'd100', role: 'tens', pairId } })
+
+      // Ones die
+      const oMesh = createDieMesh('d10')
+      oMesh.castShadow = true
+      diceGroup.add(oMesh)
+      const oBody = createBodyForMesh(oMesh)
+      oBody.position.set(baseX + 0.6, startY + Math.random() * 2, baseZ)
+      oBody.velocity.set((Math.random() - 0.5) * 6, -2 - Math.random() * 2, (Math.random() - 0.5) * 6)
+      oBody.angularVelocity.set((Math.random() - 0.5) * 12, (Math.random() - 0.5) * 12, (Math.random() - 0.5) * 12)
+      world.addBody(oBody)
+      physicsPairs.push({ mesh: oMesh, body: oBody, type: 'd10', meta: { group: 'd100', role: 'ones', pairId } })
+
+    } else {
+      const mesh = createDieMesh(type)
+      mesh.castShadow = true
+      diceGroup.add(mesh)
+
+      const body = createBodyForMesh(mesh)
+      const x = (Math.random() - 0.5) * range
+      const z = (Math.random() - 0.5) * range
+      body.position.set(x, startY + Math.random() * 2, z)
+      body.velocity.set((Math.random() - 0.5) * 6, -2 - Math.random() * 2, (Math.random() - 0.5) * 6)
+      body.angularVelocity.set((Math.random() - 0.5) * 12, (Math.random() - 0.5) * 12, (Math.random() - 0.5) * 12)
+      world.addBody(body)
+      physicsPairs.push({ mesh, body, type })
+    }
   }
 
   rolling = true
@@ -616,24 +645,40 @@ function rollDice({ type = 'd20', count = 1 } = {}) {
   const check = () => {
     if (allBodiesSleeping() || (performance.now() - rollStartTime) > MAX_ROLL_TIME) {
       const results = []
+      // Group d100 pairs
+      const d100Groups = new Map()
       for (const p of physicsPairs) {
-        let value
-        if (p.type === 'd6') {
-          value = computeD6TopNumber(p.mesh)
-        } else if (p.type === 'd4' || p.type === 'd8' || p.type === 'd10' || p.type === 'd20') {
-          value = computeTopTriangleFaceValue(p.mesh)
-        } else if (p.type === 'd12') {
-          value = computeTopFaceByClustering(p.mesh, 12)
-        } else if (p.type === 'd100') {
-          // Keep percentile logic for now (two d10 approach planned)
-          const tens = Math.floor(Math.random() * 10) * 10
-          const ones = Math.floor(Math.random() * 10)
-          value = tens + ones || 100
-        } else {
-          value = computeTopTriangleFaceValue(p.mesh)
+        if (p.meta?.group === 'd100') {
+          const id = p.meta.pairId
+          if (!d100Groups.has(id)) d100Groups.set(id, {})
+          const g = d100Groups.get(id)
+          if (p.meta.role === 'tens') g.tens = p
+          else if (p.meta.role === 'ones') g.ones = p
         }
+      }
+      // Process non-d100 dice
+      for (const p of physicsPairs) {
+        if (p.meta?.group === 'd100') continue
+        let value
+        if (p.type === 'd6') value = computeD6TopNumber(p.mesh)
+        else if (p.type === 'd12') value = computeTopFaceByClustering(p.mesh, 12)
+        else value = computeTopTriangleFaceValue(p.mesh) // d4,d8,d10,d20
         results.push({ type: p.type, value })
         placeLabelOnMesh(p.mesh, value)
+      }
+      // Process d100 groups
+      for (const [id, g] of d100Groups) {
+        if (!g.tens || !g.ones) continue
+        const tensFace = computeTopTriangleFaceValue(g.tens.mesh) // 1..10
+        const onesFace = computeTopTriangleFaceValue(g.ones.mesh) // 1..10
+        const tens = ((tensFace % 10) * 10) // 0..90, where 10->0
+        const ones = (onesFace % 10) // 0..9, where 10->0
+        const final = (tens + ones) || 100
+        results.push({ type: 'd100', value: final })
+        // Labels on each die
+        const tensLabel = tens === 0 ? '00' : String(tens)
+        placeLabelOnMesh(g.tens.mesh, tensLabel)
+        placeLabelOnMesh(g.ones.mesh, String(ones))
       }
       emit('rolled', results)
       rolling = false
