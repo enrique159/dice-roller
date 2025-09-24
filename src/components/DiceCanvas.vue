@@ -283,19 +283,31 @@ function setupScene() {
   dir.shadow.camera.far = 50
   scene.add(dir)
 
-  const ground = new THREE.Mesh(
-    new THREE.PlaneGeometry(50, 50),
-    new THREE.MeshStandardMaterial({ color: 0x0f172a, roughness: 1 })
-  )
+  const groundSize = 50
+  const BOARD_TILING = 1 // fewer repeats -> larger tiles
+  const groundGeo = new THREE.PlaneGeometry(groundSize, groundSize)
+  const texLoader = new THREE.TextureLoader()
+  const boardTex = texLoader.load('/board_background.jpg')
+  boardTex.wrapS = THREE.RepeatWrapping
+  boardTex.wrapT = THREE.RepeatWrapping
+  boardTex.repeat.set(BOARD_TILING, BOARD_TILING)
+  boardTex.anisotropy = Math.min(8, renderer.capabilities.getMaxAnisotropy?.() || 4)
+  // Casino felt-like material: subtle sheen and softer roughness
+  const groundMat = new THREE.MeshPhysicalMaterial({
+    map: boardTex,
+    roughness: 0.45,
+    metalness: 0.0,
+    clearcoat: 0.12,
+    clearcoatRoughness: 0.85,
+    sheen: 0.75,
+    sheenColor: new THREE.Color('#000000'),
+    sheenRoughness: 0.6,
+  })
+  const ground = new THREE.Mesh(groundGeo, groundMat)
   ground.rotation.x = -Math.PI / 2
   ground.position.y = 0
   ground.receiveShadow = true
   scene.add(ground)
-
-  // Visual grid on top of ground for better spatial reference
-  const grid = new THREE.GridHelper(50, 50, 0x334155, 0x1f2937)
-  grid.position.y = 0.001
-  scene.add(grid)
 
   diceGroup = new THREE.Group()
   scene.add(diceGroup)
