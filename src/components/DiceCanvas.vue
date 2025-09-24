@@ -1,25 +1,21 @@
 <script setup>
-import { onMounted, onBeforeUnmount, ref, watch, defineEmits, defineExpose } from 'vue'
+import { onMounted, onBeforeUnmount, ref, defineEmits, defineExpose } from 'vue'
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
-import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
+import * as CANNON from 'cannon-es'
 
 const emit = defineEmits(['rolled'])
 
 const container = ref(null)
 let scene, camera, renderer, controls, animationId
 let diceGroup
-let gltfLoader
-const models = new Map() // type -> THREE.Object3D
-const modelPaths = {
-  d4: '/models/dice/d4.glb',
-  d6: '/models/dice/d6.glb',
-  d8: '/models/dice/d8.glb',
-  d10: '/models/dice/d10.glb',
-  d12: '/models/dice/d12.glb',
-  d20: '/models/dice/d20.glb',
-  d100: '/models/dice/d100.glb', // opcional: algunos usan el mismo que d10
-}
+// gltfLoader removed (no GLTF models)
+let world, groundBody
+const physicsPairs = [] // { mesh, body, type }
+let rolling = false
+let rollStartTime = 0
+const MAX_ROLL_TIME = 6000 // ms fallback in case bodies never sleep
+// We will procedurally create geometries for each die type
 
 function createLabelSprite(text) {
   const size = 256
@@ -55,6 +51,50 @@ function createLabelSprite(text) {
   const scale = 0.9
   sprite.scale.setScalar(scale)
   return sprite
+}
+
+function createConvexPolyhedronFromMesh(mesh) {
+  const geom = mesh.geometry
+  if (!geom || !geom.attributes?.position) return null
+  const pos = geom.attributes.position
+  const hasIndex = !!geom.index
+  const idx = geom.index
+  // Deduplicate vertices with rounding for stability
+  const keyOf = (x, y, z) => `${Math.round(x * 1000) / 1000},${Math.round(y * 1000) / 1000},${Math.round(z * 1000) / 1000}`
+  const map = new Map()
+  const vertices = [] // CANNON.Vec3
+  const getIndex = (x, y, z) => {
+    const k = keyOf(x, y, z)
+    let id = map.get(k)
+    if (id === undefined) {
+      id = vertices.length
+      vertices.push(new CANNON.Vec3(x, y, z))
+      map.set(k, id)
+    }
+    return id
+  }
+  const faces = [] // number[][]
+  const readVert = (i) => ({ x: pos.getX(i), y: pos.getY(i), z: pos.getZ(i) })
+  if (hasIndex) {
+    for (let i = 0; i < idx.count; i += 3) {
+      const ia = idx.getX(i), ib = idx.getX(i + 1), ic = idx.getX(i + 2)
+      const a = readVert(ia), b = readVert(ib), c = readVert(ic)
+      const A = getIndex(a.x, a.y, a.z)
+      const B = getIndex(b.x, b.y, b.z)
+      const C = getIndex(c.x, c.y, c.z)
+      faces.push([A, B, C])
+    }
+  } else {
+    for (let i = 0; i < pos.count; i += 3) {
+      const a = readVert(i), b = readVert(i + 1), c = readVert(i + 2)
+      const A = getIndex(a.x, a.y, a.z)
+      const B = getIndex(b.x, b.y, b.z)
+      const C = getIndex(c.x, c.y, c.z)
+      faces.push([A, B, C])
+    }
+  }
+  if (vertices.length < 4 || faces.length < 4) return null
+  return new CANNON.ConvexPolyhedron({ vertices, faces })
 }
 
 const ambientColor = 0xb0c4de
@@ -106,6 +146,19 @@ function setupScene() {
 
   diceGroup = new THREE.Group()
   scene.add(diceGroup)
+
+  // Physics world and ground (y = 0)
+  world = new CANNON.World({ gravity: new CANNON.Vec3(0, -9.82, 0) })
+  world.allowSleep = true
+  world.defaultContactMaterial.restitution = 0.3
+  world.defaultContactMaterial.friction = 0.4
+
+  const groundShape = new CANNON.Plane()
+  groundBody = new CANNON.Body({ mass: 0 })
+  groundBody.addShape(groundShape)
+  // Rotate plane so its normal is +Y
+  groundBody.quaternion.setFromEuler(-Math.PI / 2, 0, 0)
+  world.addBody(groundBody)
 }
 
 function resize() {
@@ -119,6 +172,15 @@ function resize() {
 
 function animate() {
   controls?.update()
+  if (world) {
+    world.step(1 / 60)
+    for (const p of physicsPairs) {
+      const bp = p.body.position
+      const bq = p.body.quaternion
+      p.mesh.position.set(bp.x, bp.y, bp.z)
+      p.mesh.quaternion.set(bq.x, bq.y, bq.z, bq.w)
+    }
+  }
   animationId = requestAnimationFrame(animate)
   renderer.render(scene, camera)
 }
@@ -145,6 +207,11 @@ function clearDice() {
       }
     })
   }
+  // Remove physics bodies
+  while (physicsPairs.length) {
+    const p = physicsPairs.pop()
+    if (p?.body) world?.removeBody(p.body)
+  }
 }
 
 function enableShadows(obj) {
@@ -162,13 +229,7 @@ function enableShadows(obj) {
   })
 }
 
-function cloneModel(type) {
-  const base = models.get(type)
-  if (!base) return null
-  const clone = base.clone(true)
-  enableShadows(clone)
-  return clone
-}
+// cloneModel removed; GLTF models not used
 
 function createTextTexture(text, options = {}) {
   const size = options.size ?? 256
@@ -206,42 +267,37 @@ function createD6Materials() {
   }))
 }
 
-async function preloadModels() {
-  gltfLoader = gltfLoader || new GLTFLoader()
-  const entries = Object.entries(modelPaths)
-  await Promise.all(entries.map(([type, path]) => new Promise((resolve) => {
-    gltfLoader.load(path, (gltf) => {
-      const scene = gltf.scene || gltf.scenes?.[0]
-      if (scene) {
-        // Normalize scale to roughly ~1.2 units tall like our primitives
-        const box = new THREE.Box3().setFromObject(scene)
-        const size = new THREE.Vector3()
-        box.getSize(size)
-        const target = 1.2
-        const maxDim = Math.max(size.x, size.y, size.z) || 1
-        const scale = target / maxDim
-        scene.scale.setScalar(scale)
-        enableShadows(scene)
-        models.set(type, scene)
-      }
-      resolve()
-    }, undefined, () => resolve())
-  })))
-  // If no explicit d100 model but we have d10, reuse it visually for percentile
-  if (!models.get('d100') && models.get('d10')) {
-    models.set('d100', models.get('d10'))
+function createPentagonalBipyramidGeometry(radius = 0.9, height = 1.2) {
+  const half = height / 2
+  const apexTop = new THREE.Vector3(0, half, 0)
+  const apexBottom = new THREE.Vector3(0, -half, 0)
+  const ring = []
+  for (let i = 0; i < 5; i++) {
+    const a = (i / 5) * Math.PI * 2
+    ring.push(new THREE.Vector3(Math.cos(a) * radius, 0, Math.sin(a) * radius))
   }
+  // Build vertices array
+  const vertices = [apexTop, apexBottom, ...ring]
+  // Indices: top fan (apexTop, i, i+1), bottom fan (apexBottom, i+1, i)
+  const indices = []
+  for (let i = 0; i < 5; i++) {
+    const i0 = 2 + i
+    const i1 = 2 + ((i + 1) % 5)
+    // top triangle
+    indices.push(0, i0, i1)
+    // bottom triangle
+    indices.push(1, i1, i0)
+  }
+  const pos = new Float32Array(vertices.length * 3)
+  vertices.forEach((v, i) => { pos[i * 3] = v.x; pos[i * 3 + 1] = v.y; pos[i * 3 + 2] = v.z })
+  const geom = new THREE.BufferGeometry()
+  geom.setAttribute('position', new THREE.BufferAttribute(pos, 3))
+  geom.setIndex(indices)
+  geom.computeVertexNormals()
+  return geom
 }
 
 function createDieMesh(type) {
-  // Basic placeholder geometries for polyhedral dice
-  const model = cloneModel(type)
-  if (model) {
-    // Wrap in an Object3D so we can animate/position uniformly
-    const wrapper = new THREE.Object3D()
-    wrapper.add(model)
-    return wrapper
-  }
   switch (type) {
     case 'd4':
       return new THREE.Mesh(
@@ -259,9 +315,8 @@ function createDieMesh(type) {
         new THREE.MeshStandardMaterial({ color: 0xf59e0b, metalness: 0.1, roughness: 0.6 })
       )
     case 'd10':
-      // Approximate with an Icosahedron placeholder visually for now
       return new THREE.Mesh(
-        new THREE.IcosahedronGeometry(1, 0),
+        createPentagonalBipyramidGeometry(0.9, 1.4),
         new THREE.MeshStandardMaterial({ color: 0x22d3ee, metalness: 0.1, roughness: 0.6 })
       )
     case 'd12':
@@ -274,12 +329,207 @@ function createDieMesh(type) {
         new THREE.IcosahedronGeometry(1),
         new THREE.MeshStandardMaterial({ color: 0xef4444, metalness: 0.1, roughness: 0.6 })
       )
+    case 'd100':
+      return new THREE.Mesh(
+        createPentagonalBipyramidGeometry(0.9, 1.4),
+        new THREE.MeshStandardMaterial({ color: 0x38bdf8, metalness: 0.1, roughness: 0.6 })
+      )
     default:
       return new THREE.Mesh(
         new THREE.BoxGeometry(1.2, 1.2, 1.2),
         new THREE.MeshStandardMaterial({ color: 0x94a3b8 })
       )
   }
+}
+
+// ---- Physics helpers ----
+function createBodyForMesh(mesh) {
+  // Prefer accurate convex polyhedron for stability and correct resting faces
+  let shape = null
+  try {
+    shape = createConvexPolyhedronFromMesh(mesh)
+  } catch (e) {
+    shape = null
+  }
+  if (!shape) {
+    // Fallback to box approximation
+    const box3 = new THREE.Box3().setFromObject(mesh)
+    const size = new THREE.Vector3()
+    box3.getSize(size)
+    const hx = Math.max(0.1, size.x / 2)
+    const hy = Math.max(0.1, size.y / 2)
+    const hz = Math.max(0.1, size.z / 2)
+    shape = new CANNON.Box(new CANNON.Vec3(hx, hy, hz))
+  }
+  const body = new CANNON.Body({ mass: 1 })
+  body.addShape(shape)
+  body.linearDamping = 0.25
+  body.angularDamping = 0.3
+  body.allowSleep = true
+  body.sleepSpeedLimit = 0.1
+  body.sleepTimeLimit = 0.6
+  return body
+}
+
+function computeD6TopNumber(mesh) {
+  // Box face order: +X, -X, +Y, -Y, +Z, -Z -> numbers [3,4,1,6,2,5]
+  const faceNumbers = [3, 4, 1, 6, 2, 5]
+  const up = new THREE.Vector3(0, 1, 0)
+  const dirs = [
+    new THREE.Vector3(1, 0, 0),
+    new THREE.Vector3(-1, 0, 0),
+    new THREE.Vector3(0, 1, 0),
+    new THREE.Vector3(0, -1, 0),
+    new THREE.Vector3(0, 0, 1),
+    new THREE.Vector3(0, 0, -1),
+  ]
+  let bestIdx = 0
+  let bestDot = -Infinity
+  const q = mesh.quaternion
+  for (let i = 0; i < dirs.length; i++) {
+    const v = dirs[i].clone().applyQuaternion(q)
+    const d = v.dot(up)
+    if (d > bestDot) {
+      bestDot = d
+      bestIdx = i
+    }
+  }
+  return faceNumbers[bestIdx]
+}
+
+// For polyhedra made of triangular faces (d4, d8, d10 bipyramid, d20)
+function computeTopTriangleFaceValue(mesh) {
+  const up = new THREE.Vector3(0, 1, 0)
+  // Gather triangle normals in world space
+  let bestDot = -Infinity
+  let bestIndex = 0
+  let faceCount = 0
+
+  // Support group meshes (wrapper) by traversing
+  const meshes = []
+  mesh.traverse?.((n) => { if (n.isMesh) meshes.push(n) })
+  if (meshes.length === 0 && mesh.isMesh) meshes.push(mesh)
+
+  for (const m of meshes) {
+    const geom = m.geometry
+    if (!geom || !geom.attributes?.position) continue
+    const pos = geom.attributes.position
+    const index = geom.index
+    const mat = m.matrixWorld
+    const nMat = new THREE.Matrix3().getNormalMatrix(mat)
+    const a = new THREE.Vector3(), b = new THREE.Vector3(), c = new THREE.Vector3()
+    const v1 = new THREE.Vector3(), v2 = new THREE.Vector3(), n = new THREE.Vector3()
+
+    const readVert = (i, out) => {
+      out.set(pos.getX(i), pos.getY(i), pos.getZ(i)).applyMatrix4(mat)
+    }
+    if (index) {
+      for (let i = 0; i < index.count; i += 3) {
+        const ia = index.getX(i), ib = index.getX(i + 1), ic = index.getX(i + 2)
+        readVert(ia, a); readVert(ib, b); readVert(ic, c)
+        v1.subVectors(b, a)
+        v2.subVectors(c, a)
+        n.crossVectors(v1, v2).applyMatrix3(nMat).normalize()
+        const d = n.dot(up)
+        if (d > bestDot) { bestDot = d; bestIndex = faceCount }
+        faceCount++
+      }
+    } else {
+      for (let i = 0; i < pos.count; i += 3) {
+        readVert(i, a); readVert(i + 1, b); readVert(i + 2, c)
+        v1.subVectors(b, a)
+        v2.subVectors(c, a)
+        n.crossVectors(v1, v2).applyMatrix3(nMat).normalize()
+        const d = n.dot(up)
+        if (d > bestDot) { bestDot = d; bestIndex = faceCount }
+        faceCount++
+      }
+    }
+  }
+  // Map triangle index to 1..faceCount. For regular solids, triangle count equals face count.
+  const value = (bestIndex % faceCount) + 1
+  return value
+}
+
+// For d12 (faces are pentagons triangulated). Cluster triangle normals to unique faces.
+function computeTopFaceByClustering(mesh, expectedFaces) {
+  const up = new THREE.Vector3(0, 1, 0)
+  const clusters = new Map() // key -> { normal: Vector3 (avg), dot: number (avg), count }
+  const meshes = []
+  mesh.traverse?.((n) => { if (n.isMesh) meshes.push(n) })
+  if (meshes.length === 0 && mesh.isMesh) meshes.push(mesh)
+
+  const addNormal = (nWorld) => {
+    // Quantize to 2 decimals to cluster co-planar triangles
+    const qx = Math.round(nWorld.x * 100) / 100
+    const qy = Math.round(nWorld.y * 100) / 100
+    const qz = Math.round(nWorld.z * 100) / 100
+    const key = `${qx},${qy},${qz}`
+    const dot = nWorld.dot(up)
+    const c = clusters.get(key)
+    if (c) {
+      c.dot = (c.dot * c.count + dot) / (c.count + 1)
+      c.count++
+    } else {
+      clusters.set(key, { normal: new THREE.Vector3(qx, qy, qz), dot, count: 1 })
+    }
+  }
+
+  for (const m of meshes) {
+    const geom = m.geometry
+    if (!geom || !geom.attributes?.position) continue
+    const pos = geom.attributes.position
+    const index = geom.index
+    const mat = m.matrixWorld
+    const nMat = new THREE.Matrix3().getNormalMatrix(mat)
+    const a = new THREE.Vector3(), b = new THREE.Vector3(), c = new THREE.Vector3()
+    const v1 = new THREE.Vector3(), v2 = new THREE.Vector3(), n = new THREE.Vector3()
+    const readVert = (i, out) => { out.set(pos.getX(i), pos.getY(i), pos.getZ(i)).applyMatrix4(mat) }
+    if (index) {
+      for (let i = 0; i < index.count; i += 3) {
+        const ia = index.getX(i), ib = index.getX(i + 1), ic = index.getX(i + 2)
+        readVert(ia, a); readVert(ib, b); readVert(ic, c)
+        v1.subVectors(b, a)
+        v2.subVectors(c, a)
+        n.crossVectors(v1, v2).applyMatrix3(nMat).normalize()
+        addNormal(n)
+      }
+    } else {
+      for (let i = 0; i < pos.count; i += 3) {
+        readVert(i, a); readVert(i + 1, b); readVert(i + 2, c)
+        v1.subVectors(b, a)
+        v2.subVectors(c, a)
+        n.crossVectors(v1, v2).applyMatrix3(nMat).normalize()
+        addNormal(n)
+      }
+    }
+  }
+
+  let bestKey = null
+  let bestDot = -Infinity
+  let i = 0
+  let bestIdx = 0
+  for (const [key, cluster] of clusters) {
+    if (cluster.dot > bestDot) { bestDot = cluster.dot; bestKey = key; bestIdx = i }
+    i++
+  }
+  // Map cluster index to 1..expectedFaces
+  const value = (bestIdx % expectedFaces) + 1
+  return value
+}
+
+function allBodiesSleeping() {
+  return physicsPairs.length > 0 && physicsPairs.every(p => p.body.sleepState === CANNON.Body.SLEEPING)
+}
+
+function placeLabelOnMesh(mesh, value) {
+  const label = createLabelSprite(value)
+  const box = new THREE.Box3().setFromObject(mesh)
+  const size = new THREE.Vector3()
+  box.getSize(size)
+  const y = (size.y / 2 || 0.6) + 0.4
+  label.position.set(0, y, 0)
+  mesh.add(label)
 }
 
 function rollAnimation(mesh) {
@@ -342,44 +592,63 @@ function layoutDice(count) {
 }
 
 function rollDice({ type = 'd20', count = 1 } = {}) {
+  if (rolling) return
   clearDice()
-  const results = []
+  const startY = 10
+  const range = 4
   for (let i = 0; i < count; i++) {
     const mesh = createDieMesh(type)
     mesh.castShadow = true
-    mesh.position.set((Math.random() - 0.5) * 4, 1 + Math.random() * 1, (Math.random() - 0.5) * 4)
-    mesh.rotation.set(Math.random() * Math.PI, Math.random() * Math.PI, Math.random() * Math.PI)
     diceGroup.add(mesh)
-    rollAnimation(mesh)
 
-    if (type === 'd100') {
-      // use two d10 to simulate d100: tens + ones
-      const tens = Math.floor(Math.random() * 10) * 10
-      const ones = Math.floor(Math.random() * 10)
-      const value = tens + ones || 100
-      results.push({ type: 'd100', value })
-      const label = createLabelSprite(value)
-      label.position.set(0, 1.5, 0)
-      mesh.add(label)
+    const body = createBodyForMesh(mesh)
+    const x = (Math.random() - 0.5) * range
+    const z = (Math.random() - 0.5) * range
+    body.position.set(x, startY + Math.random() * 2, z)
+    body.velocity.set((Math.random() - 0.5) * 6, -2 - Math.random() * 2, (Math.random() - 0.5) * 6)
+    body.angularVelocity.set((Math.random() - 0.5) * 12, (Math.random() - 0.5) * 12, (Math.random() - 0.5) * 12)
+    world.addBody(body)
+    physicsPairs.push({ mesh, body, type })
+  }
+
+  rolling = true
+  rollStartTime = performance.now()
+  const check = () => {
+    if (allBodiesSleeping() || (performance.now() - rollStartTime) > MAX_ROLL_TIME) {
+      const results = []
+      for (const p of physicsPairs) {
+        let value
+        if (p.type === 'd6') {
+          value = computeD6TopNumber(p.mesh)
+        } else if (p.type === 'd4' || p.type === 'd8' || p.type === 'd10' || p.type === 'd20') {
+          value = computeTopTriangleFaceValue(p.mesh)
+        } else if (p.type === 'd12') {
+          value = computeTopFaceByClustering(p.mesh, 12)
+        } else if (p.type === 'd100') {
+          // Keep percentile logic for now (two d10 approach planned)
+          const tens = Math.floor(Math.random() * 10) * 10
+          const ones = Math.floor(Math.random() * 10)
+          value = tens + ones || 100
+        } else {
+          value = computeTopTriangleFaceValue(p.mesh)
+        }
+        results.push({ type: p.type, value })
+        placeLabelOnMesh(p.mesh, value)
+      }
+      emit('rolled', results)
+      rolling = false
     } else {
-      const value = randomRoll(type)
-      results.push({ type, value })
-      const label = createLabelSprite(value)
-      label.position.set(0, 1.5, 0)
-      mesh.add(label)
+      requestAnimationFrame(check)
     }
   }
-  layoutDice(count)
-  // Notify parent after short delay to simulate end of roll
-  setTimeout(() => emit('rolled', results), 800)
+  requestAnimationFrame(check)
 }
 
 defineExpose({ rollDice })
 
 onMounted(() => {
   setupScene()
-  // Preload optional GLTF models if present in /public/models/dice
-  preloadModels().catch(() => {})
+  // GLTF preload removed: all dice share d6 visuals
   animate()
   window.addEventListener('resize', resize)
 })
