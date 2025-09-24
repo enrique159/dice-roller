@@ -17,6 +17,11 @@ let rollStartTime = 0
 const MAX_ROLL_TIME = 6000 // ms fallback in case bodies never sleep
 // We will procedurally create geometries for each die type
 let d100PairCounter = 0
+// Arena constants
+const ARENA_SIZE = 10
+const ARENA_HEIGHT = 4
+const WALL_THICKNESS = 0.4
+let arenaGroup
 
 function createLabelSprite(text) {
   const size = 256
@@ -324,6 +329,33 @@ function setupScene() {
   ground.receiveShadow = true
   scene.add(ground)
 
+  // Arena walls to keep dice within camera view
+  arenaGroup = new THREE.Group()
+  scene.add(arenaGroup)
+  // Invisible wall material (rendered fully transparent). We'll also hide meshes.
+  const wallMat = new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false })
+  // Create 4 walls: +X, -X, +Z, -Z
+  const half = ARENA_SIZE / 2
+  const wallGeoX = new THREE.BoxGeometry(WALL_THICKNESS, ARENA_HEIGHT, ARENA_SIZE)
+  const wallGeoZ = new THREE.BoxGeometry(ARENA_SIZE, ARENA_HEIGHT, WALL_THICKNESS)
+  const wallMeshes = []
+  const wPos = [
+    new THREE.Vector3( half, ARENA_HEIGHT / 2, 0), // +X
+    new THREE.Vector3(-half, ARENA_HEIGHT / 2, 0), // -X
+    new THREE.Vector3(0, ARENA_HEIGHT / 2,  half), // +Z
+    new THREE.Vector3(0, ARENA_HEIGHT / 2, -half), // -Z
+  ]
+  const wGeo  = [wallGeoX, wallGeoX, wallGeoZ, wallGeoZ]
+  for (let i = 0; i < 4; i++) {
+    const mesh = new THREE.Mesh(wGeo[i], wallMat)
+    mesh.position.copy(wPos[i])
+    mesh.castShadow = false
+    mesh.receiveShadow = false
+    mesh.visible = false
+    arenaGroup.add(mesh)
+    wallMeshes.push(mesh)
+  }
+
   diceGroup = new THREE.Group()
   scene.add(diceGroup)
 
@@ -339,6 +371,25 @@ function setupScene() {
   // Rotate plane so its normal is +Y
   groundBody.quaternion.setFromEuler(-Math.PI / 2, 0, 0)
   world.addBody(groundBody)
+
+  // Physics bodies for walls
+  const wallBodies = []
+  const wallHalfX = new CANNON.Vec3(WALL_THICKNESS / 2, ARENA_HEIGHT / 2, ARENA_SIZE / 2)
+  const wallHalfZ = new CANNON.Vec3(ARENA_SIZE / 2, ARENA_HEIGHT / 2, WALL_THICKNESS / 2)
+  const shapes = [new CANNON.Box(wallHalfX), new CANNON.Box(wallHalfX), new CANNON.Box(wallHalfZ), new CANNON.Box(wallHalfZ)]
+  const bodyPositions = [
+    new CANNON.Vec3( half, ARENA_HEIGHT / 2, 0),
+    new CANNON.Vec3(-half, ARENA_HEIGHT / 2, 0),
+    new CANNON.Vec3(0, ARENA_HEIGHT / 2,  half),
+    new CANNON.Vec3(0, ARENA_HEIGHT / 2, -half),
+  ]
+  for (let i = 0; i < 4; i++) {
+    const b = new CANNON.Body({ mass: 0 })
+    b.addShape(shapes[i])
+    b.position.copy(bodyPositions[i])
+    world.addBody(b)
+    wallBodies.push(b)
+  }
 }
 
 function resize() {
