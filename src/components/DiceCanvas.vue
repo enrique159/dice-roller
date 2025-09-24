@@ -261,7 +261,10 @@ function setupScene() {
   const height = container.value.clientHeight
 
   camera = new THREE.PerspectiveCamera(45, width / height, 0.1, 1000)
-  camera.position.set(6, 6, 10)
+  // Strict top-down view: camera above origin looking straight down
+  camera.position.set(0, 15, 0)
+  camera.up.set(0, 0, -1)
+  camera.lookAt(0, 0, 0)
 
   renderer = new THREE.WebGLRenderer({ antialias: true })
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
@@ -272,11 +275,20 @@ function setupScene() {
 
   controls = new OrbitControls(camera, renderer.domElement)
   controls.enableDamping = true
+  // Only allow zoom (no rotation/pan) to keep view orthogonal from above
+  controls.enableRotate = false
+  controls.enablePan = false
+  controls.enableZoom = true
+  controls.minDistance = 8
+  controls.maxDistance = 80
+  controls.target.set(0, 0, 0)
+  controls.update()
 
   const ambient = new THREE.AmbientLight(ambientColor, 0.6)
   scene.add(ambient)
   const dir = new THREE.DirectionalLight(lightColor, 1.1)
-  dir.position.set(5, 10, 7)
+  // Raise the light higher and slightly offset for nicer shadows
+  dir.position.set(6, 18, 8)
   dir.castShadow = true
   dir.shadow.mapSize.set(1024, 1024)
   dir.shadow.camera.near = 1
@@ -873,13 +885,15 @@ function layoutDice(count) {
 function rollDice({ type = 'd20', count = 1 } = {}) {
   if (rolling) return
   clearDice()
-  const startY = 10
-  const range = 4
+  const startY = Math.max(10, camera?.position?.y ? camera.position.y - 3 : 10)
+  const targetX = controls?.target?.x ?? 0
+  const targetZ = controls?.target?.z ?? 0
+  const jitterRadius = count > 1 ? 0.6 : 0
   for (let i = 0; i < count; i++) {
     if (type === 'd100') {
       const pairId = d100PairCounter++
-      const baseX = (Math.random() - 0.5) * range
-      const baseZ = (Math.random() - 0.5) * range
+      const baseX = targetX
+      const baseZ = targetZ
 
       // Tens die
       const tMesh = createDieMesh('d10')
@@ -909,9 +923,10 @@ function rollDice({ type = 'd20', count = 1 } = {}) {
       diceGroup.add(mesh)
 
       const body = createBodyForMesh(mesh)
-      const x = (Math.random() - 0.5) * range
-      const z = (Math.random() - 0.5) * range
-      body.position.set(x, startY + Math.random() * 2, z)
+      const angle = count > 1 ? (i / count) * Math.PI * 2 : 0
+      const ox = jitterRadius ? Math.cos(angle) * jitterRadius : 0
+      const oz = jitterRadius ? Math.sin(angle) * jitterRadius : 0
+      body.position.set(targetX + ox, startY + Math.random() * 2, targetZ + oz)
       body.velocity.set((Math.random() - 0.5) * 6, -2 - Math.random() * 2, (Math.random() - 0.5) * 6)
       body.angularVelocity.set((Math.random() - 0.5) * 12, (Math.random() - 0.5) * 12, (Math.random() - 0.5) * 12)
       world.addBody(body)
