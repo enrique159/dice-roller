@@ -396,16 +396,16 @@ function setupScene() {
   world.defaultContactMaterial.friction = 0.35
   // Contact pairs
   world.addContactMaterial(new CANNON.ContactMaterial(dieMaterial, groundMaterial, {
-    restitution: 0.6,
-    friction: 0.38,
+    restitution: 0.7,
+    friction: 0.34,
   }))
   world.addContactMaterial(new CANNON.ContactMaterial(dieMaterial, wallMaterialPhys, {
-    restitution: 0.5,
-    friction: 0.32,
+    restitution: 0.6,
+    friction: 0.3,
   }))
   world.addContactMaterial(new CANNON.ContactMaterial(dieMaterial, dieMaterial, {
-    restitution: 0.45,
-    friction: 0.35,
+    restitution: 0.5,
+    friction: 0.34,
   }))
 
   const groundShape = new CANNON.Plane()
@@ -754,8 +754,8 @@ function createBodyForMesh(mesh) {
   }
   const body = new CANNON.Body({ mass: 2.5 })
   body.addShape(shape)
-  body.linearDamping = 0.12
-  body.angularDamping = 0.15
+  body.linearDamping = 0.05
+  body.angularDamping = 0.12
   body.allowSleep = true
   body.sleepSpeedLimit = 0.08
   body.sleepTimeLimit = 0.8
@@ -985,7 +985,7 @@ function layoutDice(count) {
 function rollDice({ type = 'd20', count = 1 } = {}) {
   if (rolling) return
   clearDice()
-  const startY = Math.max(10, camera?.position?.y ? camera.position.y - 3 : 10)
+  const startY = Math.max(12, camera?.position?.y ? camera.position.y - 1 : 12)
   const targetX = controls?.target?.x ?? 0
   const targetZ = controls?.target?.z ?? 0
   const jitterRadius = count > 1 ? 0.6 : 0
@@ -1001,8 +1001,8 @@ function rollDice({ type = 'd20', count = 1 } = {}) {
       diceGroup.add(tMesh)
       const tBody = createBodyForMesh(tMesh)
       tBody.position.set(baseX - 0.6, startY + Math.random() * 2, baseZ)
-      tBody.velocity.set((Math.random() - 0.5) * 8, -3 - Math.random() * 2, (Math.random() - 0.5) * 8)
-      tBody.angularVelocity.set((Math.random() - 0.5) * 16, (Math.random() - 0.5) * 16, (Math.random() - 0.5) * 16)
+      tBody.velocity.set((Math.random() - 0.5) * 10, -3.5 - Math.random() * 2.5, (Math.random() - 0.5) * 10)
+      tBody.angularVelocity.set((Math.random() - 0.5) * 20, (Math.random() - 0.5) * 20, (Math.random() - 0.5) * 20)
       world.addBody(tBody)
       physicsPairs.push({ mesh: tMesh, body: tBody, type: 'd10', meta: { group: 'd100', role: 'tens', pairId } })
 
@@ -1012,8 +1012,8 @@ function rollDice({ type = 'd20', count = 1 } = {}) {
       diceGroup.add(oMesh)
       const oBody = createBodyForMesh(oMesh)
       oBody.position.set(baseX + 0.6, startY + Math.random() * 2, baseZ)
-      oBody.velocity.set((Math.random() - 0.5) * 8, -3 - Math.random() * 2, (Math.random() - 0.5) * 8)
-      oBody.angularVelocity.set((Math.random() - 0.5) * 16, (Math.random() - 0.5) * 16, (Math.random() - 0.5) * 16)
+      oBody.velocity.set((Math.random() - 0.5) * 10, -3.5 - Math.random() * 2.5, (Math.random() - 0.5) * 10)
+      oBody.angularVelocity.set((Math.random() - 0.5) * 20, (Math.random() - 0.5) * 20, (Math.random() - 0.5) * 20)
       world.addBody(oBody)
       physicsPairs.push({ mesh: oMesh, body: oBody, type: 'd10', meta: { group: 'd100', role: 'ones', pairId } })
 
@@ -1027,8 +1027,8 @@ function rollDice({ type = 'd20', count = 1 } = {}) {
       const ox = jitterRadius ? Math.cos(angle) * jitterRadius : 0
       const oz = jitterRadius ? Math.sin(angle) * jitterRadius : 0
       body.position.set(targetX + ox, startY + Math.random() * 2, targetZ + oz)
-      body.velocity.set((Math.random() - 0.5) * 8, -3 - Math.random() * 2, (Math.random() - 0.5) * 8)
-      body.angularVelocity.set((Math.random() - 0.5) * 16, (Math.random() - 0.5) * 16, (Math.random() - 0.5) * 16)
+      body.velocity.set((Math.random() - 0.5) * 10, -3.5 - Math.random() * 2.5, (Math.random() - 0.5) * 10)
+      body.angularVelocity.set((Math.random() - 0.5) * 20, (Math.random() - 0.5) * 20, (Math.random() - 0.5) * 20)
       world.addBody(body)
       physicsPairs.push({ mesh, body, type })
     }
