@@ -99,7 +99,10 @@ function createFaceStickerMesh(text) {
   const mat = new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthTest: true, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1 })
   const size = 0.35
   const geo = new THREE.PlaneGeometry(size, size)
-  return new THREE.Mesh(geo, mat)
+  const m = new THREE.Mesh(geo, mat)
+  m.userData.isSticker = true
+  m.renderOrder = 1
+  return m
 }
 
 function addFaceStickersTriMesh(mesh) {
@@ -699,8 +702,8 @@ function computeTopTriangleFaceValue(mesh) {
 
   // Support group meshes (wrapper) by traversing
   const meshes = []
-  mesh.traverse?.((n) => { if (n.isMesh) meshes.push(n) })
-  if (meshes.length === 0 && mesh.isMesh) meshes.push(mesh)
+  mesh.traverse?.((n) => { if (n.isMesh && !n.userData?.isSticker) meshes.push(n) })
+  if (meshes.length === 0 && mesh.isMesh && !mesh.userData?.isSticker) meshes.push(mesh)
 
   for (const m of meshes) {
     const geom = m.geometry
@@ -747,8 +750,8 @@ function computeTopFaceByClustering(mesh, expectedFaces) {
   const up = new THREE.Vector3(0, 1, 0)
   const clusters = new Map() // key -> { normal: Vector3 (avg), dot: number (avg), count }
   const meshes = []
-  mesh.traverse?.((n) => { if (n.isMesh) meshes.push(n) })
-  if (meshes.length === 0 && mesh.isMesh) meshes.push(mesh)
+  mesh.traverse?.((n) => { if (n.isMesh && !n.userData?.isSticker) meshes.push(n) })
+  if (meshes.length === 0 && mesh.isMesh && !mesh.userData?.isSticker) meshes.push(mesh)
 
   const addNormal = (nWorld) => {
     // Quantize to 2 decimals to cluster co-planar triangles
