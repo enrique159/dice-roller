@@ -54,6 +54,45 @@ function createLabelSprite(text) {
   return sprite
 }
 
+function addFaceStickersBox(mesh) {
+  if (!mesh.geometry || mesh.geometry.type !== 'BoxGeometry') return
+  const geom = mesh.geometry
+  const params = geom.parameters || {}
+  const w = params.width ?? 1.2
+  const h = params.height ?? 1.2
+  const d = params.depth ?? 1.2
+  const hw = w / 2, hh = h / 2, hd = d / 2
+  // Order must match computeD6TopNumber face mapping: +X,-X,+Y,-Y,+Z,-Z -> [3,4,1,6,2,5]
+  const normals = [
+    new THREE.Vector3(1, 0, 0),
+    new THREE.Vector3(-1, 0, 0),
+    new THREE.Vector3(0, 1, 0),
+    new THREE.Vector3(0, -1, 0),
+    new THREE.Vector3(0, 0, 1),
+    new THREE.Vector3(0, 0, -1),
+  ]
+  const centers = [
+    new THREE.Vector3(hw, 0, 0),
+    new THREE.Vector3(-hw, 0, 0),
+    new THREE.Vector3(0, hh, 0),
+    new THREE.Vector3(0, -hh, 0),
+    new THREE.Vector3(0, 0, hd),
+    new THREE.Vector3(0, 0, -hd),
+  ]
+  const numbers = [3, 4, 1, 6, 2, 5]
+  const zAxis = new THREE.Vector3(0, 0, 1)
+  const q = new THREE.Quaternion()
+  const epsilon = 0.01
+  for (let i = 0; i < 6; i++) {
+    const sticker = createFaceStickerMesh(numbers[i])
+    q.setFromUnitVectors(zAxis, normals[i])
+    sticker.quaternion.copy(q)
+    const pos = centers[i].clone().add(normals[i].clone().multiplyScalar(epsilon))
+    sticker.position.copy(pos)
+    mesh.add(sticker)
+  }
+}
+
 // --- Sticker-like labels (planes oriented to the face normal) ---
 function createFaceStickerMesh(text) {
   const tex = createTextTexture(text)
@@ -516,10 +555,12 @@ function createDieMesh(type) {
       return mesh
     }
     case 'd6': {
-      return new THREE.Mesh(
+      const mesh = new THREE.Mesh(
         new THREE.BoxGeometry(1.2, 1.2, 1.2),
-        createD6Materials()
+        new THREE.MeshStandardMaterial({ color: 0xffffff, metalness: 0.05, roughness: 0.6 })
       )
+      addFaceStickersBox(mesh)
+      return mesh
     }
     case 'd8': {
       const mesh = new THREE.Mesh(
