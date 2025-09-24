@@ -19,9 +19,11 @@ const MAX_ROLL_TIME = 6000 // ms fallback in case bodies never sleep
 let d100PairCounter = 0
 // Arena constants
 const ARENA_SIZE = 10
-const ARENA_HEIGHT = 4
+const ARENA_HEIGHT = 20
 const WALL_THICKNESS = 0.4
 let arenaGroup
+// Cannon materials
+let dieMaterial, groundMaterial, wallMaterialPhys
 
 function createLabelSprite(text) {
   const size = 256
@@ -362,14 +364,36 @@ function setupScene() {
   // Physics world and ground (y = 0)
   world = new CANNON.World({ gravity: new CANNON.Vec3(0, -9.82, 0) })
   world.allowSleep = true
-  world.defaultContactMaterial.restitution = 0.3
-  world.defaultContactMaterial.friction = 0.4
+  // Snappier solver for more lively contacts
+  world.solver.iterations = 15
+  world.solver.tolerance = 1e-3
+  // Define specific materials for better control
+  dieMaterial = new CANNON.Material('die')
+  groundMaterial = new CANNON.Material('ground')
+  wallMaterialPhys = new CANNON.Material('wall')
+  // Default as fallback
+  world.defaultContactMaterial.restitution = 0.35
+  world.defaultContactMaterial.friction = 0.35
+  // Contact pairs
+  world.addContactMaterial(new CANNON.ContactMaterial(dieMaterial, groundMaterial, {
+    restitution: 0.6,
+    friction: 0.38,
+  }))
+  world.addContactMaterial(new CANNON.ContactMaterial(dieMaterial, wallMaterialPhys, {
+    restitution: 0.5,
+    friction: 0.32,
+  }))
+  world.addContactMaterial(new CANNON.ContactMaterial(dieMaterial, dieMaterial, {
+    restitution: 0.45,
+    friction: 0.35,
+  }))
 
   const groundShape = new CANNON.Plane()
   groundBody = new CANNON.Body({ mass: 0 })
   groundBody.addShape(groundShape)
   // Rotate plane so its normal is +Y
   groundBody.quaternion.setFromEuler(-Math.PI / 2, 0, 0)
+  groundBody.material = groundMaterial
   world.addBody(groundBody)
 
   // Physics bodies for walls
@@ -387,6 +411,7 @@ function setupScene() {
     const b = new CANNON.Body({ mass: 0 })
     b.addShape(shapes[i])
     b.position.copy(bodyPositions[i])
+    b.material = wallMaterialPhys
     world.addBody(b)
     wallBodies.push(b)
   }
@@ -707,13 +732,14 @@ function createBodyForMesh(mesh) {
     const hz = Math.max(0.1, size.z / 2)
     shape = new CANNON.Box(new CANNON.Vec3(hx, hy, hz))
   }
-  const body = new CANNON.Body({ mass: 1 })
+  const body = new CANNON.Body({ mass: 2.5 })
   body.addShape(shape)
-  body.linearDamping = 0.25
-  body.angularDamping = 0.3
+  body.linearDamping = 0.12
+  body.angularDamping = 0.15
   body.allowSleep = true
   body.sleepSpeedLimit = 0.1
   body.sleepTimeLimit = 0.6
+  if (dieMaterial) body.material = dieMaterial
   return body
 }
 
@@ -955,8 +981,8 @@ function rollDice({ type = 'd20', count = 1 } = {}) {
       diceGroup.add(tMesh)
       const tBody = createBodyForMesh(tMesh)
       tBody.position.set(baseX - 0.6, startY + Math.random() * 2, baseZ)
-      tBody.velocity.set((Math.random() - 0.5) * 6, -2 - Math.random() * 2, (Math.random() - 0.5) * 6)
-      tBody.angularVelocity.set((Math.random() - 0.5) * 12, (Math.random() - 0.5) * 12, (Math.random() - 0.5) * 12)
+      tBody.velocity.set((Math.random() - 0.5) * 8, -3 - Math.random() * 2, (Math.random() - 0.5) * 8)
+      tBody.angularVelocity.set((Math.random() - 0.5) * 16, (Math.random() - 0.5) * 16, (Math.random() - 0.5) * 16)
       world.addBody(tBody)
       physicsPairs.push({ mesh: tMesh, body: tBody, type: 'd10', meta: { group: 'd100', role: 'tens', pairId } })
 
@@ -966,8 +992,8 @@ function rollDice({ type = 'd20', count = 1 } = {}) {
       diceGroup.add(oMesh)
       const oBody = createBodyForMesh(oMesh)
       oBody.position.set(baseX + 0.6, startY + Math.random() * 2, baseZ)
-      oBody.velocity.set((Math.random() - 0.5) * 6, -2 - Math.random() * 2, (Math.random() - 0.5) * 6)
-      oBody.angularVelocity.set((Math.random() - 0.5) * 12, (Math.random() - 0.5) * 12, (Math.random() - 0.5) * 12)
+      oBody.velocity.set((Math.random() - 0.5) * 8, -3 - Math.random() * 2, (Math.random() - 0.5) * 8)
+      oBody.angularVelocity.set((Math.random() - 0.5) * 16, (Math.random() - 0.5) * 16, (Math.random() - 0.5) * 16)
       world.addBody(oBody)
       physicsPairs.push({ mesh: oMesh, body: oBody, type: 'd10', meta: { group: 'd100', role: 'ones', pairId } })
 
@@ -981,8 +1007,8 @@ function rollDice({ type = 'd20', count = 1 } = {}) {
       const ox = jitterRadius ? Math.cos(angle) * jitterRadius : 0
       const oz = jitterRadius ? Math.sin(angle) * jitterRadius : 0
       body.position.set(targetX + ox, startY + Math.random() * 2, targetZ + oz)
-      body.velocity.set((Math.random() - 0.5) * 6, -2 - Math.random() * 2, (Math.random() - 0.5) * 6)
-      body.angularVelocity.set((Math.random() - 0.5) * 12, (Math.random() - 0.5) * 12, (Math.random() - 0.5) * 12)
+      body.velocity.set((Math.random() - 0.5) * 8, -3 - Math.random() * 2, (Math.random() - 0.5) * 8)
+      body.angularVelocity.set((Math.random() - 0.5) * 16, (Math.random() - 0.5) * 16, (Math.random() - 0.5) * 16)
       world.addBody(body)
       physicsPairs.push({ mesh, body, type })
     }
