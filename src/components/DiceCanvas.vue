@@ -54,6 +54,119 @@ function createLabelSprite(text) {
   return sprite
 }
 
+// --- Sticker-like labels (planes oriented to the face normal) ---
+function createFaceStickerMesh(text) {
+  const tex = createTextTexture(text)
+  const mat = new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthTest: true, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1 })
+  const size = 0.35
+  const geo = new THREE.PlaneGeometry(size, size)
+  return new THREE.Mesh(geo, mat)
+}
+
+function addFaceStickersTriMesh(mesh) {
+  const geom = mesh.geometry
+  if (!geom || !geom.attributes?.position) return
+  const pos = geom.attributes.position
+  const index = geom.index
+  const a = new THREE.Vector3(), b = new THREE.Vector3(), c = new THREE.Vector3()
+  const v1 = new THREE.Vector3(), v2 = new THREE.Vector3(), n = new THREE.Vector3()
+  const center = new THREE.Vector3()
+  let faceNo = 0
+  const readVert = (i, out) => out.set(pos.getX(i), pos.getY(i), pos.getZ(i))
+  const alignQuat = new THREE.Quaternion()
+  const zAxis = new THREE.Vector3(0, 0, 1)
+  const place = () => {
+    faceNo += 1
+    const sticker = createFaceStickerMesh(faceNo)
+    alignQuat.setFromUnitVectors(zAxis, n)
+    sticker.quaternion.copy(alignQuat)
+    const offset = n.clone().multiplyScalar(0.06)
+    sticker.position.copy(center).add(offset)
+    mesh.add(sticker)
+  }
+  if (index) {
+    for (let i = 0; i < index.count; i += 3) {
+      const ia = index.getX(i), ib = index.getX(i + 1), ic = index.getX(i + 2)
+      readVert(ia, a); readVert(ib, b); readVert(ic, c)
+      v1.subVectors(b, a)
+      v2.subVectors(c, a)
+      n.crossVectors(v1, v2).normalize()
+      center.copy(a).add(b).add(c).multiplyScalar(1 / 3)
+      place()
+    }
+  } else {
+    for (let i = 0; i < pos.count; i += 3) {
+      readVert(i, a); readVert(i + 1, b); readVert(i + 2, c)
+      v1.subVectors(b, a)
+      v2.subVectors(c, a)
+      n.crossVectors(v1, v2).normalize()
+      center.copy(a).add(b).add(c).multiplyScalar(1 / 3)
+      place()
+    }
+  }
+}
+
+function addFaceStickersD12(mesh) {
+  const geom = mesh.geometry
+  if (!geom || !geom.attributes?.position) return
+  const pos = geom.attributes.position
+  const index = geom.index
+  const a = new THREE.Vector3(), b = new THREE.Vector3(), c = new THREE.Vector3()
+  const v1 = new THREE.Vector3(), v2 = new THREE.Vector3(), n = new THREE.Vector3()
+  const center = new THREE.Vector3()
+  const clusters = [] // { n: Vector3 (avg), c: Vector3 (sum), count }
+  const findCluster = (normal) => {
+    // Match by angle threshold
+    const dotThreshold = 0.995
+    for (const cl of clusters) {
+      if (cl.n.dot(normal) > dotThreshold) return cl
+    }
+    const cl = { n: normal.clone(), c: new THREE.Vector3(), count: 0 }
+    clusters.push(cl)
+    return cl
+  }
+  const readVert = (i, out) => out.set(pos.getX(i), pos.getY(i), pos.getZ(i))
+  if (index) {
+    for (let i = 0; i < index.count; i += 3) {
+      const ia = index.getX(i), ib = index.getX(i + 1), ic = index.getX(i + 2)
+      readVert(ia, a); readVert(ib, b); readVert(ic, c)
+      v1.subVectors(b, a)
+      v2.subVectors(c, a)
+      n.crossVectors(v1, v2).normalize()
+      center.copy(a).add(b).add(c).multiplyScalar(1 / 3)
+      const cl = findCluster(n)
+      cl.n.add(n).normalize()
+      cl.c.add(center)
+      cl.count++
+    }
+  } else {
+    for (let i = 0; i < pos.count; i += 3) {
+      readVert(i, a); readVert(i + 1, b); readVert(i + 2, c)
+      v1.subVectors(b, a)
+      v2.subVectors(c, a)
+      n.crossVectors(v1, v2).normalize()
+      center.copy(a).add(b).add(c).multiplyScalar(1 / 3)
+      const cl = findCluster(n)
+      cl.n.add(n).normalize()
+      cl.c.add(center)
+      cl.count++
+    }
+  }
+  const alignQuat = new THREE.Quaternion()
+  const zAxis = new THREE.Vector3(0, 0, 1)
+  let faceNo = 0
+  for (const cl of clusters) {
+    faceNo += 1
+    const sticker = createFaceStickerMesh(faceNo)
+    alignQuat.setFromUnitVectors(zAxis, cl.n)
+    sticker.quaternion.copy(alignQuat)
+    const cAvg = cl.c.clone().multiplyScalar(1 / cl.count)
+    const offset = cl.n.clone().multiplyScalar(0.06)
+    sticker.position.copy(cAvg).add(offset)
+    mesh.add(sticker)
+  }
+}
+
 function createConvexPolyhedronFromMesh(mesh) {
   const geom = mesh.geometry
   if (!geom || !geom.attributes?.position) return null
@@ -298,43 +411,163 @@ function createPentagonalBipyramidGeometry(radius = 0.9, height = 1.2) {
   return geom
 }
 
+// Place tiny camera-facing labels on every triangular face of a mesh.
+// Labels are numbered in triangle iteration order so they match computeTopTriangleFaceValue.
+function addFaceLabelsTriMesh(mesh) {
+  const geom = mesh.geometry
+  if (!geom || !geom.attributes?.position) return
+  const pos = geom.attributes.position
+  const index = geom.index
+  const a = new THREE.Vector3(), b = new THREE.Vector3(), c = new THREE.Vector3()
+  const v1 = new THREE.Vector3(), v2 = new THREE.Vector3(), n = new THREE.Vector3()
+  const center = new THREE.Vector3()
+  let faceNo = 0
+  const readVert = (i, out) => out.set(pos.getX(i), pos.getY(i), pos.getZ(i))
+  if (index) {
+    for (let i = 0; i < index.count; i += 3) {
+      const ia = index.getX(i), ib = index.getX(i + 1), ic = index.getX(i + 2)
+      readVert(ia, a); readVert(ib, b); readVert(ic, c)
+      v1.subVectors(b, a)
+      v2.subVectors(c, a)
+      n.crossVectors(v1, v2).normalize()
+      center.copy(a).add(b).add(c).multiplyScalar(1 / 3)
+      faceNo += 1
+      const sprite = createLabelSprite(faceNo)
+      sprite.scale.setScalar(0.18)
+      const offset = n.clone().multiplyScalar(0.12)
+      sprite.position.copy(center.clone().add(offset))
+      mesh.add(sprite)
+    }
+  } else {
+    for (let i = 0; i < pos.count; i += 3) {
+      readVert(i, a); readVert(i + 1, b); readVert(i + 2, c)
+      v1.subVectors(b, a)
+      v2.subVectors(c, a)
+      n.crossVectors(v1, v2).normalize()
+      center.copy(a).add(b).add(c).multiplyScalar(1 / 3)
+      faceNo += 1
+      const sprite = createLabelSprite(faceNo)
+      sprite.scale.setScalar(0.18)
+      const offset = n.clone().multiplyScalar(0.12)
+      sprite.position.copy(center.clone().add(offset))
+      mesh.add(sprite)
+    }
+  }
+}
+
+// For d12 faces (pentagons) triangulated: cluster by face normal to place one label per face.
+function addFaceLabelsD12(mesh) {
+  const geom = mesh.geometry
+  if (!geom || !geom.attributes?.position) return
+  const pos = geom.attributes.position
+  const index = geom.index
+  const a = new THREE.Vector3(), b = new THREE.Vector3(), c = new THREE.Vector3()
+  const v1 = new THREE.Vector3(), v2 = new THREE.Vector3(), n = new THREE.Vector3()
+  const center = new THREE.Vector3()
+  const clusters = new Map() // key -> { n: Vector3 (avg), center: Vector3 (sum), count }
+  const keyOf = (nx, ny, nz) => `${Math.round(nx * 100) / 100},${Math.round(ny * 100) / 100},${Math.round(nz * 100) / 100}`
+  const addTri = () => {
+    n.normalize()
+    const k = keyOf(n.x, n.y, n.z)
+    const cl = clusters.get(k)
+    if (cl) {
+      cl.n.add(n)
+      cl.center.add(center)
+      cl.count++
+    } else {
+      clusters.set(k, { n: n.clone(), center: center.clone(), count: 1 })
+    }
+  }
+  const readVert = (i, out) => out.set(pos.getX(i), pos.getY(i), pos.getZ(i))
+  if (index) {
+    for (let i = 0; i < index.count; i += 3) {
+      const ia = index.getX(i), ib = index.getX(i + 1), ic = index.getX(i + 2)
+      readVert(ia, a); readVert(ib, b); readVert(ic, c)
+      v1.subVectors(b, a)
+      v2.subVectors(c, a)
+      n.crossVectors(v1, v2)
+      center.copy(a).add(b).add(c).multiplyScalar(1 / 3)
+      addTri()
+    }
+  } else {
+    for (let i = 0; i < pos.count; i += 3) {
+      readVert(i, a); readVert(i + 1, b); readVert(i + 2, c)
+      v1.subVectors(b, a)
+      v2.subVectors(c, a)
+      n.crossVectors(v1, v2)
+      center.copy(a).add(b).add(c).multiplyScalar(1 / 3)
+      addTri()
+    }
+  }
+  let faceNo = 0
+  for (const [key, cl] of clusters) {
+    faceNo += 1
+    const nAvg = cl.n.normalize()
+    const cAvg = cl.center.multiplyScalar(1 / cl.count)
+    const sprite = createLabelSprite(faceNo)
+    sprite.scale.setScalar(0.18)
+    const offset = nAvg.clone().multiplyScalar(0.12)
+    sprite.position.copy(cAvg.clone().add(offset))
+    mesh.add(sprite)
+  }
+}
+
 function createDieMesh(type) {
   switch (type) {
-    case 'd4':
-      return new THREE.Mesh(
+    case 'd4': {
+      const mesh = new THREE.Mesh(
         new THREE.TetrahedronGeometry(1),
         new THREE.MeshStandardMaterial({ color: 0x60a5fa, metalness: 0.1, roughness: 0.6 })
       )
-    case 'd6':
+      addFaceStickersTriMesh(mesh)
+      return mesh
+    }
+    case 'd6': {
       return new THREE.Mesh(
         new THREE.BoxGeometry(1.2, 1.2, 1.2),
         createD6Materials()
       )
-    case 'd8':
-      return new THREE.Mesh(
+    }
+    case 'd8': {
+      const mesh = new THREE.Mesh(
         new THREE.OctahedronGeometry(1),
         new THREE.MeshStandardMaterial({ color: 0xf59e0b, metalness: 0.1, roughness: 0.6 })
       )
-    case 'd10':
-      return new THREE.Mesh(
+      addFaceStickersTriMesh(mesh)
+      return mesh
+    }
+    case 'd10': {
+      const mesh = new THREE.Mesh(
         createPentagonalBipyramidGeometry(0.9, 1.4),
         new THREE.MeshStandardMaterial({ color: 0x22d3ee, metalness: 0.1, roughness: 0.6 })
       )
-    case 'd12':
-      return new THREE.Mesh(
+      addFaceStickersTriMesh(mesh)
+      return mesh
+    }
+    case 'd12': {
+      const mesh = new THREE.Mesh(
         new THREE.DodecahedronGeometry(1),
         new THREE.MeshStandardMaterial({ color: 0xa78bfa, metalness: 0.1, roughness: 0.6 })
       )
-    case 'd20':
-      return new THREE.Mesh(
+      addFaceStickersD12(mesh)
+      return mesh
+    }
+    case 'd20': {
+      const mesh = new THREE.Mesh(
         new THREE.IcosahedronGeometry(1),
         new THREE.MeshStandardMaterial({ color: 0xef4444, metalness: 0.1, roughness: 0.6 })
       )
-    case 'd100':
-      return new THREE.Mesh(
+      addFaceStickersTriMesh(mesh)
+      return mesh
+    }
+    case 'd100': {
+      const mesh = new THREE.Mesh(
         createPentagonalBipyramidGeometry(0.9, 1.4),
         new THREE.MeshStandardMaterial({ color: 0x38bdf8, metalness: 0.1, roughness: 0.6 })
       )
+      addFaceLabelsTriMesh(mesh)
+      return mesh
+    }
     default:
       return new THREE.Mesh(
         new THREE.BoxGeometry(1.2, 1.2, 1.2),
@@ -481,7 +714,7 @@ function computeTopFaceByClustering(mesh, expectedFaces) {
     const pos = geom.attributes.position
     const index = geom.index
     const mat = m.matrixWorld
-    const nMat = new THREE.Matrix3().getNormalMatrix(mat)
+    // normals will be derived from world-space vertex positions directly
     const a = new THREE.Vector3(), b = new THREE.Vector3(), c = new THREE.Vector3()
     const v1 = new THREE.Vector3(), v2 = new THREE.Vector3(), n = new THREE.Vector3()
     const readVert = (i, out) => { out.set(pos.getX(i), pos.getY(i), pos.getZ(i)).applyMatrix4(mat) }
@@ -491,7 +724,7 @@ function computeTopFaceByClustering(mesh, expectedFaces) {
         readVert(ia, a); readVert(ib, b); readVert(ic, c)
         v1.subVectors(b, a)
         v2.subVectors(c, a)
-        n.crossVectors(v1, v2).applyMatrix3(nMat).normalize()
+        n.crossVectors(v1, v2).normalize()
         addNormal(n)
       }
     } else {
@@ -499,7 +732,7 @@ function computeTopFaceByClustering(mesh, expectedFaces) {
         readVert(i, a); readVert(i + 1, b); readVert(i + 2, c)
         v1.subVectors(b, a)
         v2.subVectors(c, a)
-        n.crossVectors(v1, v2).applyMatrix3(nMat).normalize()
+        n.crossVectors(v1, v2).normalize()
         addNormal(n)
       }
     }
