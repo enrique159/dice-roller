@@ -14,7 +14,7 @@ let world, groundBody
 const physicsPairs = [] // { mesh, body, type }
 let rolling = false
 let rollStartTime = 0
-const MAX_ROLL_TIME = 6000 // ms fallback in case bodies never sleep
+const MAX_ROLL_TIME = 10000 // ms fallback in case bodies never sleep
 // We will procedurally create geometries for each die type
 let d100PairCounter = 0
 // Arena constants
@@ -24,6 +24,26 @@ const WALL_THICKNESS = 0.4
 let arenaGroup
 // Cannon materials
 let dieMaterial, groundMaterial, wallMaterialPhys
+
+// Stability detection (results only after dice are truly settled)
+let stableFrames = 0
+const STABLE_FRAMES = 8 // ~130ms @60fps
+const SPEED_EPS = 0.1
+const ANG_EPS = 0.3
+function bodiesUnderThreshold() {
+  if (!physicsPairs.length) return false
+  // If all are sleeping, we are stable
+  const allSleeping = physicsPairs.every(p => p.body.sleepState === CANNON.Body.SLEEPING)
+  if (allSleeping) return true
+  // Otherwise, require small linear and angular speeds for everyone
+  for (const p of physicsPairs) {
+    const v = p.body.velocity
+    const w = p.body.angularVelocity
+    if (!v || !w) return false
+    if (v.length() > SPEED_EPS || w.length() > ANG_EPS) return false
+  }
+  return true
+}
 
 function createLabelSprite(text) {
   const size = 256
@@ -737,8 +757,8 @@ function createBodyForMesh(mesh) {
   body.linearDamping = 0.12
   body.angularDamping = 0.15
   body.allowSleep = true
-  body.sleepSpeedLimit = 0.1
-  body.sleepTimeLimit = 0.6
+  body.sleepSpeedLimit = 0.08
+  body.sleepTimeLimit = 0.8
   if (dieMaterial) body.material = dieMaterial
   return body
 }
@@ -1016,8 +1036,15 @@ function rollDice({ type = 'd20', count = 1 } = {}) {
 
   rolling = true
   rollStartTime = performance.now()
+  stableFrames = 0
   const check = () => {
-    if (allBodiesSleeping() || (performance.now() - rollStartTime) > MAX_ROLL_TIME) {
+    const elapsed = performance.now() - rollStartTime
+    if (bodiesUnderThreshold()) {
+      stableFrames++
+    } else {
+      stableFrames = 0
+    }
+    if (stableFrames >= STABLE_FRAMES || elapsed > MAX_ROLL_TIME) {
       const results = []
       // Group d100 pairs
       const d100Groups = new Map()
