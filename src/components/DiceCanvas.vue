@@ -347,18 +347,10 @@ function enableShadows(obj) {
 
 function createTextTexture(text, options = {}) {
   const size = options.size ?? 256
-  const bg = options.bg ?? '#0b3b2e' // dark teal-ish
   const fg = options.fg ?? '#e2e8f0' // slate-200
   const canvas = document.createElement('canvas')
   canvas.width = canvas.height = size
   const ctx = canvas.getContext('2d')
-  // background
-  ctx.fillStyle = bg
-  ctx.fillRect(0, 0, size, size)
-  // border
-  ctx.strokeStyle = '#10b981'
-  ctx.lineWidth = size * 0.03
-  ctx.strokeRect(ctx.lineWidth, ctx.lineWidth, size - ctx.lineWidth * 2, size - ctx.lineWidth * 2)
   // text
   ctx.fillStyle = fg
   ctx.textAlign = 'center'
@@ -376,6 +368,7 @@ function createD6Materials() {
   const numbers = [3, 4, 1, 6, 2, 5]
   return numbers.map(n => new THREE.MeshStandardMaterial({
     map: createTextTexture(n),
+    transparent: true,
     metalness: 0.05,
     roughness: 0.6,
   }))
